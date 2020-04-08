@@ -1,8 +1,14 @@
 import numpy as np
 import graphics
 import rover
+
 '''
-Utilities to save intermediate files
+Debug flags
+'''
+DEBUG = False
+PRELOADED = False
+'''
+Utilities to save intermediate files. Useful for Viterbi.
 '''
 def save_checkpoint(filename, filedata):
     import pickle
@@ -17,17 +23,6 @@ def load_checkpoint(filename):
     print(f"loading: {filename}")
     with open(filename, "rb") as open_file:
         return pickle.load(open_file)
-'''
-Utilities to return whether the distribution satisfies the axiom of probability
-'''
-def distribution_sum(prob_distribution):
-    total_prob = 0
-    for state in prob_distribution:
-        total_prob = total_prob + prob_distribution[state]
-    return total_prob
-
-def distribution_sanity_check(prob_distribution):
-    print("Sum of distribution: ", distribution_sum(prob_distribution))
 ###############################################################################
 
 def forward_backward(all_possible_hidden_states,
@@ -57,34 +52,18 @@ def forward_backward(all_possible_hidden_states,
     rover.py), and the i-th Distribution should correspond to time
     step i
     """
-
     num_time_steps = len(observations)
     forward_messages = [None] * num_time_steps
     backward_messages = [None] * num_time_steps
     marginals = [None] * num_time_steps 
     
-    #Initialize forward(z0)
-    forward_messages[0] = rover.Distribution()
-    for z_i in all_possible_hidden_states:
-        obs_distr = observation_model(z_i)
-        observation = observations[0]
-        P_obs = 1
-        if observation is not None:
-            P_obs = obs_distr.get(observation)
-        if P_obs is None:
-            continue
-        forward_messages[0][z_i] = prior_distribution[z_i] * P_obs
-    forward_messages[0].renormalize()
-    #distribution_sanity_check(forward_messages[0])
-    
     #Compute the forward messages
-    print ("\nF/B: Computing forward messages:\n")
-    for i in range(1, num_time_steps):
+    for i in range(num_time_steps):
         forward_messages[i] = rover.Distribution()
-        for z_i in all_possible_hidden_states:
+        for state in all_possible_hidden_states:
             innerSum = 0
             #The observation probability distribution
-            obs_distr = observation_model(z_i)
+            obs_distr = observation_model(state)
             #The observation itself
             observation = observations[i]
             #The probability of observation, given a hidden state.
@@ -95,71 +74,65 @@ def forward_backward(all_possible_hidden_states,
                 P_obs_given_hidden = obs_distr.get(observation)
             #If the observation didn't exist, the inferred hidden state wouldn't 
             #be possible based on this and as such we ignore it
-            if (P_obs_given_hidden is None):
+            if P_obs_given_hidden is None:
                 continue
-            for z_iPrev in (forward_messages[i-1]):
-                alpha_prev = (forward_messages[i-1])[z_iPrev]
-                P_zn_given_zn_minus_one = transition_model(z_iPrev)[z_i]
-                #The branch below shouldn't really ever execute? IDK
-                if (P_zn_given_zn_minus_one == 0):
-                    continue
-                innerSum = innerSum + (alpha_prev * P_zn_given_zn_minus_one)
-            forward_messages[i][z_i] = P_obs_given_hidden * innerSum
+            #Handle the initialization of the recurrence relation. 
+            if i == 0:
+                #alpha(z0) = P(z0) * P(obs|z0)
+                if prior_distribution[state] is not None:
+                    forward_messages[0][state] = prior_distribution[state] * P_obs_given_hidden
+            else:
+                for previous_state in (forward_messages[i-1]):
+                    alpha_prev = (forward_messages[i-1])[previous_state]
+                    P_trans = transition_model(previous_state)[state]
+                    if (P_trans == 0):
+                        continue
+                    innerSum = innerSum + (alpha_prev * P_trans)
+                forward_messages[i][state] = P_obs_given_hidden * innerSum
         forward_messages[i].renormalize()
-        #distribution_sanity_check(forward_messages[i])
-    
-    print ("\nF/B: Computing backward messages:\n")
-    #Initialize the beta(zn-1) to a uniform distribution
-    backward_messages[num_time_steps - 1] = rover.Distribution()
-    for z_i in all_possible_hidden_states:
-        backward_messages[num_time_steps - 1][z_i] = 1
-    backward_messages[num_time_steps - 1].renormalize()
-    #distribution_sanity_check(backward_messages[num_time_steps - 1])
     
     #Compute the backward messages
-    for i in range(num_time_steps-2, -1, -1):
+    for i in range(num_time_steps-1, -1, -1):
         backward_messages[i] = rover.Distribution()
-        for z_iNext in (backward_messages[i+1]):
-            #The observation probability distribution
-            obs_distr = observation_model(z_iNext)
-            #The observation itself
-            observation = observations[i+1]
-            #The probability of observation, given a hidden state. 
-            #Assume the observation is missing, assigning it unit probability
-            obs_prob = 1
-            #if the observation exists, get it from the distribution model
-            if observation is not None:
-                obs_prob = obs_distr.get(observation)
-            #If the observation didn't exist, the inferred hidden state wouldn't
-            #be possible based on this and as such we ignore it
-            if (obs_prob is None):
-                continue
-            prod = backward_messages[i+1][z_iNext] * obs_prob
-            for z_i in all_possible_hidden_states:
-                trans_prob = transition_model(z_i)[z_iNext]
-                if (trans_prob == 0):
+        #Initialize the B(zn-1) for the recurrence relation
+        if i == num_time_steps - 1:
+            for state in all_possible_hidden_states:
+                backward_messages[i][state] = 1
+        else:
+            for next_state in (backward_messages[i+1]):
+                #The observation probability distribution
+                obs_distr = observation_model(next_state)
+                #The observation itself
+                observation = observations[i+1]
+                #The probability of observation, given a hidden state. 
+                #Assume the observation is missing, assigning it unit probability
+                obs_prob = 1
+                #if the observation exists, get it from the distribution model
+                if observation is not None:
+                    obs_prob = obs_distr.get(observation)
+                #If the observation didn't exist, the inferred hidden state wouldn't
+                #be possible based on this and as such we ignore it
+                if (obs_prob is None):
                     continue
-                backward_messages[i][z_i] = (prod * trans_prob)
+                prod = backward_messages[i+1][next_state] * obs_prob
+                for state in all_possible_hidden_states:
+                    trans_prob = transition_model(state)[next_state]
+                    if (trans_prob == 0):
+                        continue
+                    backward_messages[i][state] += (prod * trans_prob)
         backward_messages[i].renormalize()
-        #distribution_sanity_check(backward_messages[i])
-                
-    #Compute the marginals 
-    print("\nF/B: Computing marginals: \n")
+
+    #Compute the marginals
     for i in range(num_time_steps):
         marginals[i] = rover.Distribution()
         for z_i in all_possible_hidden_states:
-            marginals[i][z_i] = forward_messages[i][z_i] * backward_messages[i][z_i]
+            prod = forward_messages[i][z_i] * backward_messages[i][z_i]
+            if prod == 0:
+                #report only non-zero probabilities in the distribution
+                continue
+            marginals[i][z_i] = prod
         marginals[i].renormalize()
-        #distribution_sanity_check(marginals[i])
-    '''
-    sanity_z1 = (6, 5, 'right')
-    sanity_z2 = (6, 5, 'down')
-    print ("Part 1(b) Sanity Check: ")
-    print("\nMarginal for hidden state ", sanity_z1, " at time i=1 is: ", marginals[1][sanity_z1])
-    print("\nMarginal for hidden state ", sanity_z2, " at time i=1 is: ", marginals[1][sanity_z2])
-    '''
-    sanity_z30 = (6, 7, 'right')
-    print("\nMarginal for hidden state ", sanity_z30, " at time i=30 is: ", marginals[30][sanity_z30])
+    
     return marginals
 
 def Viterbi(all_possible_hidden_states,
@@ -178,7 +151,6 @@ def Viterbi(all_possible_hidden_states,
     A list of esitmated hidden states, each state is encoded as a tuple
     (<x>, <y>, <action>)
     """
-
     # number of timesteps
     num_time_steps = len(observations)
     #a distribution of the hidden state that represents the log probability of transition
@@ -195,85 +167,76 @@ def Viterbi(all_possible_hidden_states,
     #timestamp
     phi_z = [None] * num_time_steps
     
-    #Forward pass of Viterbi Algorithm:
-    for i in range (num_time_steps):
-        w_z[i] = rover.Distribution()
-        zPrevMax[i] = {}
-        for current_state in all_possible_hidden_states:
-            #Define the observation distribution and the current observation
-            obs_distr = observation_model(current_state)
-            observation = observations[i]
-            #Assume the observation is missing and assign it a unit probability
-            P_obs = 1
-            #If the observation exists, use the model instead to get the prob
-            if observation is not None:
-                P_obs = obs_distr.get(observation)
-            
-            #if the observation distribution didn't yield a non-zero prob for 
-            #that observation, that means the hidden state is not really possible
-            #based on that observation, so this probability should be zero, however
-            #since we are working in the log domain, note that log(0) is undefined
-            #so we assign it a very small probability.
-            #Also note, we can't skip like we do in F/B because we are taking the
-            #sum and not the product
-            if P_obs is None:
-                P_obs = 1e-10
-            #tackle the initialization of the recurrence here instead of outside
-            #the loop, it's cleaner code.
-            if (i == 0):
-                #w_(z0) = log(p(z0)) + log(p(obs0 | z0))
-                prior_prob = prior_distribution[current_state]
-                #print(prior_prob)
-                if prior_prob != 0:
-                    w_z[i][current_state] = np.log(prior_prob) + np.log(P_obs)
-            else:
-                #a hash of the previous states
-                prev_states_dict = {}
-                previous_states = w_z[i-1]
-                #print("There are ",len(previous_states), "previous states")
-                for prev_state in previous_states:
-                    #Calculate the transition probability P(zi|zi-1)
-                    #print("Keeping track of state ", prev_state, " at time ", i-1)
-                    trans_distr = transition_model(prev_state)
-                    P_trans = trans_distr.get(current_state)
-                    #print("P Trance: ", P_trans)
-                    if P_trans is None:
-                        continue
-                    #Calculate the max prev state transition log probability
-                    prev_logprob = np.log(P_trans) + w_z[i-1][prev_state]
-                    #print("Logprob is ", prev_logprob)
-                    #keep track of the probabilities of the previous states
-                    prev_states_dict[prev_state] = prev_logprob 
-                #store the previous state that is most likely to have gotten us to
-                #this current state
-                #if not prev_states_dict:
-                    #continue
-                #print ("Prev state dict:\n", prev_states_dict)
-                max_prev_state = max(prev_states_dict, key=prev_states_dict.get)
-                zPrevMax[i][current_state] = max_prev_state
-                #Calculate w(zi) based on the recurrence relation
-                assert(prev_states_dict[max_prev_state] == max(prev_states_dict.values()))
-                w_z[i][current_state] = np.log(P_obs) + max(prev_states_dict.values())
-    
-    save_checkpoint("viterbiDict", zPrevMax)
-    save_checkpoint("viterbiW", w_z)
+    #Forward pass of Viterbi Algorithm. Note: this takes a minute or two to run
+    #so if you want to quickly get the result after running it once, just turn
+    #the preloaded flag on.
+    if not PRELOADED:
+        for i in range (num_time_steps):
+            w_z[i] = rover.Distribution()
+            zPrevMax[i] = {}
+            for current_state in all_possible_hidden_states:
+                #Define the observation distribution and the current observation
+                obs_distr = observation_model(current_state)
+                observation = observations[i]
+                #Assume the observation is missing and assign it a unit probability
+                P_obs = 1
+                #If the observation exists, use the model instead to get the prob
+                if observation is not None:
+                    P_obs = obs_distr.get(observation)
+                #if the observation distribution didn't yield a non-zero prob for 
+                #that observation, that means the hidden state is not really possible
+                #based on that observation, so this probability should be zero, however
+                #since we are working in the log domain, note that log(0) is undefined
+                #so we assign it a very small probability.
+                #Also note, we can't skip like we do in F/B because we are taking the
+                #sum and not the product
+                if P_obs is None:
+                    P_obs = 1e-10
+                #tackle the initialization of the recurrence
+                if (i == 0):
+                    #w_(z0) = log(p(z0)) + log(p(obs0 | z0))
+                    prior_prob = prior_distribution[current_state]
+                    #print(prior_prob)
+                    if prior_prob != 0:
+                        w_z[i][current_state] = np.log(prior_prob) + np.log(P_obs)
+                else:
+                    #a hash of the previous states
+                    prev_states_dict = {}
+                    previous_states = w_z[i-1]
+                    #print("There are ",len(previous_states), "previous states")
+                    for prev_state in previous_states:
+                        #Calculate the transition probability P(zi|zi-1)
+                        trans_distr = transition_model(prev_state)
+                        P_trans = trans_distr.get(current_state)
+                        if P_trans is None:
+                            continue
+                        #Calculate the max prev state transition log probability
+                        prev_logprob = np.log(P_trans) + w_z[i-1][prev_state]
+                        #keep track of the probabilities of the previous states
+                        prev_states_dict[prev_state] = prev_logprob 
+                    #store the previous state that is most likely to have gotten us to
+                    #this current state
+                    #print ("Prev state dict:\n", prev_states_dict)
+                    max_prev_state = max(prev_states_dict, key=prev_states_dict.get)
+                    zPrevMax[i][current_state] = max_prev_state
+                    #Calculate w(zi) based on the recurrence relation
+                    assert(prev_states_dict[max_prev_state] == max(prev_states_dict.values()))
+                    w_z[i][current_state] = np.log(P_obs) + max(prev_states_dict.values())
+        
+        save_checkpoint("viterbiDict", zPrevMax)
+        save_checkpoint("viterbiW", w_z)    
     
     #Backward pass of Viterbi Algorithm.
-    #we find the most likely state hidden within the very last timestamp,
-    #ie. max z(N-1). From there, we backtrack and find the most likely previous
-    #state that would have led to it.
-    #Corner case: there could be multiple cases in the state (and this applies for
-    #states in previous timestamp) that qualify as the max. Handle this later
-    zPrevMax = load_checkpoint("viterbiDict")
-    w_z = load_checkpoint("viterbiW")
+    #we find the most likely state hidden within the very last timestamp.    
+    if PRELOADED:
+        zPrevMax = load_checkpoint("viterbiDict")
+        w_z = load_checkpoint("viterbiW")    
     wLast = w_z[num_time_steps-1]
-    #print(zPrevMax)
-    #print (wLast)
     argmax_zLast = max(wLast, key=wLast.get)
-    phi_z[num_time_steps-1] = argmax_zLast
+    phi_z[-1] = argmax_zLast
     #Now backtrack and find the most likely state in the previous timestamp for
     #that
-    for i in range(num_time_steps-2, 0, -1):
+    for i in range(num_time_steps-2, -1, -1):
         #the state we are backtracking from
         #print(i)
         argmax_zNext = phi_z[i+1]
@@ -282,13 +245,84 @@ def Viterbi(all_possible_hidden_states,
         #to the next hidden state.
         max_state = zPrevMax[i+1].get(argmax_zNext)
         #print ("Max leading state:\n", max_state)
-        phi_z[i] = max_state
-        #print(phi_z)
-    
+        phi_z[i] = max_state    
+
     #print (phi_z)
     estimated_hidden_states = phi_z
+    #print(len(estimated_hidden_states))
+    #rint(estimated_hidden_states)
+    
     return estimated_hidden_states
 
+def compute_errors(marginals, estimated_states, hidden_states):
+    
+    """
+    Inputs
+    ------
+    marginals: marginal distributions of z_i for each time stamp
+    estimated_states: the most likely sequence obtained from the Viterbi Algorithm
+    hidden_states: the true sequence of hidden states
+    
+    Output
+    ------
+    A tuple of error probabilities for Viterbi and F/B respectively
+    """
+    num_time_steps = len(hidden_states)
+    correct_viterbi = 0
+    correct_FB = 0
+    
+    for i in range(num_time_steps):
+        if hidden_states[i] != marginals[i].get_mode():
+            if DEBUG:
+                print("Time step ", i)
+                print("True hidden state: ", hidden_states[i])
+                print("Estimated max marginal: ", marginals[i].get_mode())
+        else:
+            correct_FB += 1
+        
+        if hidden_states[i] != estimated_states[i]:
+            if DEBUG:
+                print("Time step ", i)
+                print("True hidden state: ", hidden_states[i])
+                print("Estimated Viterbi: ", estimated_states[i])
+        else:
+            correct_viterbi += 1
+     
+    if DEBUG:
+        print ("Total correct for Viterbi:", correct_viterbi)
+        print ("Total correct for F/B", correct_FB)
+    
+    PErr_Viterbi = 1 - (correct_viterbi/num_time_steps)
+    PErr_FB = 1 - (correct_FB/num_time_steps)
+    
+    error_probabilities = (PErr_Viterbi, PErr_FB)
+    
+    return error_probabilities
+
+def detect_invalid_sequence(marginals, transition_model):
+
+    """
+    Inputs
+    ------
+    marginals: marginal distributions of z_i for each timestamp
+    transition_model: a function that takes a hidden state and returns a
+        Distribution for the next state 
+    
+    Output
+    ------
+    A tuple consisting of the first invalid (i, z_i and z_(i+1))
+    """
+    num_time_steps = len(marginals)
+    for i in range(num_time_steps-1):
+        max_zi = marginals[i].get_mode()
+        max_znext = marginals[i+1].get_mode()
+        #The transition probability P(zi+1 | zi)
+        P_trans = transition_model(max_zi).get(max_znext)
+        #If that transition couldn't happen, it wouldn't exist in the transition model
+        if P_trans is None:
+            return (i, max_zi, max_znext)
+    
+    return (None, None, None)
 
 if __name__ == '__main__':
    
@@ -320,6 +354,8 @@ if __name__ == '__main__':
 
    
     timestep = num_time_steps - 1
+    if missing_observations:
+        timestep = 30
     print("Most likely parts of marginal at time %d:" % (timestep))
     print(sorted(marginals[timestep].items(), key=lambda x: x[1], reverse=True)[:10])
     print('\n')
@@ -336,11 +372,21 @@ if __name__ == '__main__':
     print("Last 10 hidden states in the MAP estimate:")
     for time_step in range(num_time_steps - 10, num_time_steps):
         print(estimated_states[time_step])
-  
+    
+    print('\n')
+    
+    #Compute the error probabilities:
+    Perr_Vit, Perr_FB = compute_errors(marginals, estimated_states, hidden_states)
+    print ("Error Probability for Viterbi = ", round(Perr_Vit, 2))
+    print ("Error Probability for F/B = ", round(Perr_FB, 2))
+    
+    print("\n")
+    #Detect and invalid sequence in the marginal distribution
+    first_invalid_sequence = detect_invalid_sequence(marginals, rover.transition_model)
+    print("The first invalid transition segment occurs at time step i = ", first_invalid_sequence[0], \
+          "where z_i: ", first_invalid_sequence[1], " and z_i_plus_1: ", first_invalid_sequence[2])
     # if you haven't complete the algorithms, to use the visualization tool
     # let estimated_states = [None]*num_time_steps, marginals = [None]*num_time_steps
-    # estimated_states = [None]*num_time_steps
-    # marginals = [None]*num_time_steps
     if enable_graphics:
         app = graphics.playback_positions(hidden_states,
                                           observations,
