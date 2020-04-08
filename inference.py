@@ -6,7 +6,7 @@ import rover
 Debug flags
 '''
 DEBUG = False
-PRELOADED = False
+PRELOADED = False #use this to speed up Viterbi during debugging/examining results
 '''
 Utilities to save intermediate files. Useful for Viterbi.
 '''
