@@ -161,11 +161,11 @@ def Viterbi(all_possible_hidden_states,
     #hidden state for the current timestamp, and the value is a hidden state from the
     #previous timestamp that has the heighest probability to lead to the hidden state
     #denoted by the key
-    zPrevMax = [None] * num_time_steps
+    phi_z = [None] * num_time_steps
     #a function to determine the most likely sequence in the backward pass of the
     #algo as we backtrack the HMM chain. A list of estimated hidden states per
     #timestamp
-    phi_z = [None] * num_time_steps
+    zTilde_max = [None] * num_time_steps
     
     #Forward pass of Viterbi Algorithm. Note: this takes a minute or two to run
     #so if you want to quickly get the result after running it once, just turn
@@ -173,7 +173,7 @@ def Viterbi(all_possible_hidden_states,
     if not PRELOADED:
         for i in range (num_time_steps):
             w_z[i] = rover.Distribution()
-            zPrevMax[i] = {}
+            phi_z[i] = {}
             for current_state in all_possible_hidden_states:
                 #Define the observation distribution and the current observation
                 obs_distr = observation_model(current_state)
@@ -218,39 +218,39 @@ def Viterbi(all_possible_hidden_states,
                     #this current state
                     #print ("Prev state dict:\n", prev_states_dict)
                     max_prev_state = max(prev_states_dict, key=prev_states_dict.get)
-                    zPrevMax[i][current_state] = max_prev_state
+                    phi_z[i][current_state] = max_prev_state
                     #Calculate w(zi) based on the recurrence relation
                     assert(prev_states_dict[max_prev_state] == max(prev_states_dict.values()))
                     w_z[i][current_state] = np.log(P_obs) + max(prev_states_dict.values())
         
-        save_checkpoint("viterbiDict", zPrevMax)
+        save_checkpoint("viterbiDict", phi_z)
         save_checkpoint("viterbiW", w_z)    
     
     #Backward pass of Viterbi Algorithm.
     #we find the most likely state hidden within the very last timestamp.    
     if PRELOADED:
-        zPrevMax = load_checkpoint("viterbiDict")
+        phi_z = load_checkpoint("viterbiDict")
         w_z = load_checkpoint("viterbiW")    
     wLast = w_z[num_time_steps-1]
     argmax_zLast = max(wLast, key=wLast.get)
-    phi_z[-1] = argmax_zLast
+    zTilde_max[-1] = argmax_zLast
     #Now backtrack and find the most likely state in the previous timestamp for
     #that
     for i in range(num_time_steps-2, -1, -1):
         #the state we are backtracking from
         #print(i)
-        argmax_zNext = phi_z[i+1]
+        argmax_zNext = zTilde_max[i+1]
         #print(argmax_zNext)
         #the tagged state in the previous timestamp that is most likely to have led
         #to the next hidden state.
-        max_state = zPrevMax[i+1].get(argmax_zNext)
+        max_state = phi_z[i+1].get(argmax_zNext)
         #print ("Max leading state:\n", max_state)
-        phi_z[i] = max_state    
+        zTilde_max[i] = max_state    
 
     #print (phi_z)
-    estimated_hidden_states = phi_z
+    estimated_hidden_states = zTilde_max
     #print(len(estimated_hidden_states))
-    #rint(estimated_hidden_states)
+    #print(estimated_hidden_states)
     
     return estimated_hidden_states
 
