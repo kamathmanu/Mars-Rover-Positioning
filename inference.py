@@ -326,7 +326,7 @@ def detect_invalid_sequence(marginals, transition_model):
 
 if __name__ == '__main__':
    
-    enable_graphics = False
+    enable_graphics = True
     
     missing_observations = True
     if missing_observations:
@@ -385,7 +385,6 @@ if __name__ == '__main__':
     first_invalid_sequence = detect_invalid_sequence(marginals, rover.transition_model)
     print("The first invalid transition segment occurs at time step i = ", first_invalid_sequence[0], \
           "where z_i: ", first_invalid_sequence[1], " and z_i_plus_1: ", first_invalid_sequence[2])
-    # if you haven't complete the algorithms, to use the visualization tool
     # let estimated_states = [None]*num_time_steps, marginals = [None]*num_time_steps
     if enable_graphics:
         app = graphics.playback_positions(hidden_states,
